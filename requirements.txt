@@ -1,0 +1,4 @@
+# This file will list the Python dependencies for the project.
+PyMuPDF
+Flask
+requests

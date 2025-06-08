@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Conversion Result</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <style>
+        textarea {
+            width: 90%;
+            min-height: 300px;
+            font-family: monospace;
+            margin-bottom: 15px;
+        }
+        .filepath { /* Re-evaluate if this class is still needed */
+            background-color: #f0f0f0;
+            padding: 5px;
+            border: 1px solid #ddd;
+            display: inline-block;
+            margin-top: 10px;
+            margin-bottom: 10px;
+        }
+        .download-links p {
+            margin: 10px 0;
+        }
+        .download-links a {
+            text-decoration: none;
+            background-color: #007bff;
+            color: white;
+            padding: 8px 15px;
+            border-radius: 5px;
+            font-size: 0.9em;
+        }
+        .download-links a:hover {
+            background-color: #0056b3;
+        }
+    </style>
+</head>
+<body>
+    <h1>Conversion Result</h1>
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        <ul class=flashes>
+        {% for category, message in messages %}
+          <li class="{{ category }}">{{ message }}</li>
+        {% endfor %}
+        </ul>
+      {% endif %}
+    {% endwith %}
+
+    {% if original_pdf_filename %}
+        <h2>Results for: {{ original_pdf_filename }}</h2>
+    {% endif %}
+
+    {% if error_message %}
+        <p style="color: red;"><strong>Error during processing:</strong> {{ error_message }}</p>
+    {% endif %}
+
+    {% if tex_filename_for_download and filename_no_ext_for_zip %}
+        <div class="download-links">
+            <h3>Downloads:</h3>
+            <p><a href="{{ url_for('download_tex_file', filename=tex_filename_for_download) }}">Download .tex file ({{ tex_filename_for_download }})</a></p>
+            <p><a href="{{ url_for('download_zip_archive', filename_no_ext=filename_no_ext_for_zip) }}">Download .zip (includes .tex and images)</a></p>
+        </div>
+    {% elif generated_latex_code %}
+        {# Fallback if somehow filenames for download aren't available but code is #}
+        <p>LaTeX code generated, but download links are unavailable.</p>
+    {% endif %}
+
+    {% if generated_latex_code %}
+        <h3>Generated LaTeX Code (Preview):</h3>
+        <textarea readonly>{{ generated_latex_code }}</textarea>
+    {% else %}
+        {% if not error_message %}
+            <p>No LaTeX code was generated or available for preview.</p>
+        {% endif %}
+    {% endif %}
+
+    {% if raw_extracted_content %}
+        <hr>
+        <h3>Raw Extracted Content (for review):</h3>
+        <h4>Text:</h4>
+        {% if raw_extracted_content.text and raw_extracted_content.text.strip() %}
+            <pre>{{ raw_extracted_content.text }}</pre>
+        {% else %}
+            <p>No raw text was extracted.</p>
+        {% endif %}
+
+        <h4>Image Paths (relative to UPLOAD_FOLDER base):</h4>
+        {% if raw_extracted_content.image_paths %}
+            <ul>
+            {% for img_path in raw_extracted_content.image_paths %}
+                <li>{{ img_path }}</li>
+            {% endfor %}
+            </ul>
+        {% else %}
+            <p>No images were listed in raw content.</p>
+        {% endif %}
+        <h4>Margins (cm):</h4>
+        {% if raw_extracted_content.margins %}
+            <ul>
+            {% for key, value in raw_extracted_content.margins.items() %}
+                <li>{{key}}: {{value|round(2)}}cm</li>
+            {% endfor %}
+            </ul>
+        {% else %}
+            <p>No margin information.</p>
+        {% endif %}
+    {% endif %}
+
+    <hr>
+    <a href="{{ url_for('index') }}">Upload another PDF</a>
+</body>
+</html>
