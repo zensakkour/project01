@@ -48,7 +48,7 @@ def convert_image_to_latex(image_path: str) -> str:
     # --------------------------------------------------------------------
 
     # Placeholder LaTeX output
-    dummy_latex = r"$\frac{1}{2} \sum_{i=0}^{n} x_i^2$"
+    dummy_latex = r"$$\frac{1}{2} \sum_{i=0}^{n} x_i^2$$"
     print(f"OCR simulation for {image_path} returning: {dummy_latex}")
 
     # Simulate some processing time (optional)
