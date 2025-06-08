@@ -37,5 +37,5 @@ def convert_image_to_latex(img_path: str) -> str:
     inline = re.search(r"\$(.+?)\$", md)
     if inline:
         return f"$$ {inline.group(1).strip()} $$"
-    # 3) fallback: wrap entire output
-    return f"$$ {md.strip()} $$"
+    # 3) fallback: return None if no math is found
+    return None

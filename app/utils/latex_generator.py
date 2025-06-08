@@ -1,4 +1,75 @@
 import os
+import re
+
+# Helper function to identify math blocks
+def is_math_block(text_block: str) -> bool:
+    """
+    Checks if a text block is likely a mathematical formula.
+    """
+    # Remove leading/trailing whitespace
+    text_block = text_block.strip()
+    if not text_block:
+        return False
+
+    # Check for common LaTeX math keywords
+    math_keywords = [
+        r'\\sum', r'\\int', r'\\frac', r'\\sqrt', r'\\lim', r'\\sin', r'\\cos', r'\\log',
+        r'\\alpha', r'\\beta', r'\\gamma', r'\\delta', r'\\epsilon', r'\\omega', r'\\phi', r'\\pi', r'\\theta',
+        # Add more as needed, e.g., matrix environments
+        r'\\begin\{array\}', r'\\begin\{matrix\}', r'\\begin\{pmatrix\}', r'\\begin\{bmatrix\}',
+        r'\\begin\{vmatrix\}', r'\\begin\{Vmatrix\}'
+    ]
+    # Ensure keywords are treated as raw strings for regex
+    if any(re.search(keyword, text_block) for keyword in math_keywords):
+        return True
+
+    # Check for patterns like lines dominated by alphanumeric characters mixed with math symbols
+    # This regex looks for lines that have a high proportion of math-related characters.
+    # It's a heuristic and might need refinement.
+    # Count lines
+    lines = text_block.split('\n')
+    if not lines:
+        return False
+
+    math_char_ratio_threshold = 0.5  # More than 50% of non-whitespace chars are math-like
+    min_math_chars_on_line = 3 # At least 3 math-like characters on a line to be considered
+
+    math_lines_count = 0
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+
+        non_whitespace_chars = ''.join(line.split())
+        if not non_whitespace_chars:
+            continue
+
+        # More comprehensive set of typical math characters
+        math_like_chars = re.findall(r'[a-zA-Z0-9\+\-\*/=<>^_\(\)\[\]\{\}\\\.,;:!\?]', non_whitespace_chars)
+
+        # Additional check for operators or structures that are highly indicative of math
+        # e.g., `... = ...`, `... + ...`, `.../...` (more than one letter), `X^{...}`
+        operator_pattern = r'([a-zA-Z0-9]\s*[\+\-\*/=<>]+\s*[a-zA-Z0-9])|(\w\^\{.*\})|(\\[a-zA-Z]+)'
+        if re.search(operator_pattern, line) and len(math_like_chars) >= min_math_chars_on_line :
+             math_lines_count +=1
+             continue
+
+
+        if len(math_like_chars) >= min_math_chars_on_line and \
+           (len(math_like_chars) / len(non_whitespace_chars)) >= math_char_ratio_threshold:
+            math_lines_count += 1
+
+    # If a significant portion of lines look like math, consider the block as math
+    # This threshold can be adjusted. E.g. if more than half the lines are mathy.
+    if len(lines) > 0 and (math_lines_count / len(lines)) >= 0.4: # Adjusted threshold
+        return True
+
+    # Heuristic: if a block has $$...$$ or \[...\] it's definitely math
+    if (text_block.startswith("$$") and text_block.endswith("$$")) or \
+       (text_block.startswith("\\[") and text_block.endswith("\\]")):
+        return True
+
+    return False
 
 def generate_latex_document(content: dict, pdf_filename_no_ext: str) -> str:
     """
@@ -52,31 +123,52 @@ def generate_latex_document(content: dict, pdf_filename_no_ext: str) -> str:
     ]
 
     extracted_text = content.get('text', '')
-    # Basic LaTeX escaping (can be improved with a dedicated library or more rules)
+    # Apply LaTeX special character escaping first
     replacements = {
-        "\\": "\\textbackslash{}",
+        "\\": "\\textbackslash{}", # Must be first
         "{": "\\{", "}": "\\}", "_": "\\_", "^": "\\textasciicircum{}",
         "~": "\\textasciitilde{}", "&": "\\&", "$": "\\$", "#": "\\#",
         "%": "\\%",
-        # Consider common unicode characters if inputenc[utf8] doesn't cover them perfectly for LaTeX
         "“": "``", "”": "''", "‘": "`", "’": "'",
         "—": "---", "–": "--",
         "…": "\\dots{}",
     }
+    # It is important that the backslash replacement is done first.
+    # Otherwise, if some other replacement string contains a backslash,
+    # that backslash will be replaced as well.
+    # For example, if we have "%": "\\%" and we replace backslashes first,
+    # then it becomes "%": "\\textbackslash{}".
+    # If we replace backslashes last, then it becomes "%": "\\\\%". This is wrong.
+    # The order of other replacements does not matter.
+
+    # Ensure backslash is replaced first
+    if '\\' in replacements:
+      extracted_text = extracted_text.replace('\\', replacements['\\'])
     for char, latex_char in replacements.items():
+        if char == '\\': # Already handled
+            continue
         extracted_text = extracted_text.replace(char, latex_char)
 
-    # Paragraphs are often separated by double newlines in text extraction.
-    # LaTeX uses a blank line (or \par) for a new paragraph.
-    # Replace multiple newlines with LaTeX paragraph breaks.
-    # This is a simple approach; more sophisticated paragraph detection might be needed for complex PDFs.
-    processed_text_parts = []
-    for para_text in extracted_text.split('\n\n'): # Split by double newlines
-        if para_text.strip(): # Avoid empty paragraphs
-            processed_text_parts.append(para_text.replace('\n', ' \\\\ ')) # Convert single newlines to LaTeX line breaks
-    latex_parts.append("\n\n".join(processed_text_parts)) # Join paragraphs with double newlines for LaTeX
+    paragraphs = extracted_text.split('\n\n')
+    processed_latex_parts = []
+    for para_text in paragraphs:
+        # Pass the raw paragraph (with LaTeX escapes already applied) to is_math_block
+        if is_math_block(para_text):
+            # For math blocks, trim whitespace and wrap in $$ ... $$
+            # Original newlines within the math block are preserved.
+            processed_latex_parts.append(f"$$\n{para_text.strip()}\n$$")
+        else:
+            # For non-math blocks, convert single newlines to LaTeX line breaks \\
+            # and ensure it's not just whitespace.
+            if para_text.strip():
+                processed_latex_parts.append(para_text.replace('\n', ' \\\\ '))
+            elif para_text: # Preserve paragraphs that are only whitespace (e.g. multiple newlines)
+                 processed_latex_parts.append(para_text)
 
-    # TODO: Integrate Math OCR results.
+
+    latex_parts.append("\n\n".join(processed_latex_parts))
+
+    # Integrate Math OCR results.
     # If 'math_ocr' results were in `content` (e.g., content['math_ocr'] = {'img_path1': 'latex_str1', ...}),
     # this section would need to be smarter. It would iterate through document elements (text blocks, images).
     # If an image has a corresponding Math OCR LaTeX string, that string would be inserted instead of the image.
@@ -95,12 +187,14 @@ def generate_latex_document(content: dict, pdf_filename_no_ext: str) -> str:
             # Escape underscores in caption filenames for LaTeX
             img_filename_for_caption = img_filename_for_caption.replace('_', '\\_')
 
-            # If this image path has a corresponding Math OCR result, insert that LaTeX instead.
-            if img_path in math_ocr_content:
+            # If this image path has a corresponding Math OCR result (and it's not None/empty), insert that LaTeX.
+            ocr_latex = math_ocr_content.get(img_path) # Use .get() for safe access
+            if ocr_latex: # This checks if ocr_latex is not None and not an empty string
                 latex_parts.append(f"\n% Image {img_filename_for_caption} was OCR'd as a formula:")
-                latex_parts.append(math_ocr_content[img_path]) # Append the LaTeX string for the formula
+                latex_parts.append(ocr_latex) # Append the LaTeX string for the formula
             else:
                 # Otherwise, include it as a regular image.
+                # This block will be executed if img_path is not in math_ocr_content OR if its value is None/empty.
                 latex_parts.append(f"\n\\begin{{figure}}[htbp]")
                 latex_parts.append(f"  \\centering")
                 # Try to use content width from PDF margins if available for image scaling
