@@ -1,32 +1,41 @@
-
 import os
+import re
 from PIL import Image
-from .errors import MathOCRError
+from texify.inference import batch_inference
+from texify.model.model import load_model
+from texify.model.processor import load_processor
 
-# Programmatically load the pix2tex OCR model once
-try:
-    from pix2tex.cli import LatexOCR
-    _latex_ocr = LatexOCR()
-except ImportError as e:
-    raise ImportError(
-        "pix2tex not installed or torch missing. "
-        "Run `pip install pix2tex[gui] torch Pillow`"
-    ) from e
+# Lazy-load the Texify model and processor
+_model = None
+_processor = None
+def _init_texify():
+    global _model, _processor
+    if _model is None or _processor is None:
+        _model     = load_model()
+        _processor = load_processor()
 
-def convert_image_to_latex(image_path):
+def convert_image_to_latex(img_path: str) -> str:
     """
-    Uses the pix2tex model to convert the image at `image_path`
-    into a LaTeX string. Raises MathOCRError on failure.
+    OCR a formula image using Texify and return
+    the first $$…$$ chunk (or wrap the inline/math)
     """
-    if not os.path.exists(image_path):
-        raise MathOCRError(f"Image not found: {image_path}")
+    if not os.path.exists(img_path):
+        raise FileNotFoundError(f"Image not found: {img_path}")
 
-    try:
-        # Load and normalize image
-        img = Image.open(image_path).convert("RGB")
-        # Pix2tex returns the LaTeX code as a plain string
-        latex = _latex_ocr(img)
-        return latex.strip()
-    except Exception as e:
-        # Wrap any error in our MathOCRError
-        raise MathOCRError(f"pix2tex failed: {e}")
+    _init_texify()
+    img = Image.open(img_path).convert("RGB")
+    results = batch_inference([img], _model, _processor)
+    if not results:
+        raise RuntimeError("No OCR output from Texify")
+
+    md = results[0]
+    # 1) try display math
+    match = re.search(r"\$\$(.+?)\$\$", md, re.DOTALL)
+    if match:
+        return f"$$ {match.group(1).strip()} $$"
+    # 2) try inline math
+    inline = re.search(r"\$(.+?)\$", md)
+    if inline:
+        return f"$$ {inline.group(1).strip()} $$"
+    # 3) fallback: wrap entire output
+    return f"$$ {md.strip()} $$"

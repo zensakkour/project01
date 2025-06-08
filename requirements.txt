@@ -1,4 +1,8 @@
-# This file will list the Python dependencies for the project.
-PyMuPDF
-Flask
-requests
+Flask==2.0.3
+PyPDF2==2.12.1
+pytesseract==0.3.10
+torch>=2.0.1
+torchvision>=0.15.2
+torchaudio>=2.0.2
+texify>=0.1.0
+Pillow>=8.0.0
