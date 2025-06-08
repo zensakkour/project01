@@ -3,143 +3,188 @@ import re
 
 # Helper function to identify math blocks
 def is_math_block(text_block: str) -> bool:
-    # Normalize: remove leading/trailing whitespace
     text_block = text_block.strip()
     if not text_block:
         return False
 
-    # Explicit LaTeX math environments (high confidence)
-    # Added \begin{align*} and \end{align*}
-    if (text_block.startswith("$$") and text_block.endswith("$$")) or \
-       (text_block.startswith("\\[") and text_block.endswith("\\]")) or \
-       (text_block.startswith("\\begin{equation}") and text_block.endswith("\\end{equation}")) or \
-       (text_block.startswith("\\begin{equation*}") and text_block.endswith("\\end{equation*}")) or \
-       (text_block.startswith("\\begin{align}") and text_block.endswith("\\end{align}")) or \
-       (text_block.startswith("\\begin{align*}") and text_block.endswith("\\end{align*}")) or \
-       (text_block.startswith("\\begin{gather}") and text_block.endswith("\\end{gather}")) or \
-       (text_block.startswith("\\begin{gather*}") and text_block.endswith("\\end{gather*}")) or \
-       (text_block.startswith("\\begin{multline}") and text_block.endswith("\\end{multline}")) or \
-       (text_block.startswith("\\begin{multline*}") and text_block.endswith("\\end{multline*}")):
-        return True
+    # 1. Check for explicit LaTeX math environments (highest confidence)
+    # Using a more robust check for paired delimiters
+    explicit_env_pairs = {
+        "$$": "$$", # Needs careful handling due to regex special chars if used in re.
+        "\\[": "\\]",
+        "\\begin{equation}": "\\end{equation}",
+        "\\begin{equation*}": "\\end{equation*}",
+        "\\begin{align}": "\\end{align}",
+        "\\begin{align*}": "\\end{align*}",
+        "\\begin{gather}": "\\end{gather}",
+        "\\begin{gather*}": "\\end{gather*}",
+        "\\begin{multline}": "\\end{multline}",
+        "\\begin{multline*}": "\\end{multline*}",
+        "\\begin{displaymath}": "\\end{displaymath}",
+        # "\\begin{math}": "\\end{math}", # Usually inline, but can be used for blocks. Too ambiguous?
+    }
+
+    for start_delim, end_delim in explicit_env_pairs.items():
+        # Need to escape for regex if using re.match, but startswith/endswith are fine for fixed strings.
+        # Handle $ and \ for startswith/endswith
+        esc_start = start_delim.replace("$", "\\$").replace("[", "\\[")
+        esc_end = end_delim.replace("$", "\\$").replace("]", "\\]")
+
+        if text_block.startswith(start_delim) and text_block.endswith(end_delim):
+            return True
+        # A common pattern for $$ is to have them on their own lines.
+        if start_delim == "$$" and text_block.startswith("$$\n") and text_block.endswith("\n$$"):
+            return True
+
 
     lines = text_block.split('\n')
     num_lines = len(lines)
 
-    # If it's very long and not explicitly delimited, probably not a single math block
-    if num_lines > 15:  # Tunable parameter
-        prose_indicators = 0
-        # Check first few lines for prose-like characteristics (long words and a period)
-        # More robust check for sentence structure might involve checking for capital letter at start.
-        for i in range(min(3, num_lines)): # Check first few lines
-             # Check for a capital letter at the beginning of the line, a long word, and a period.
-            if re.search(r'^[A-Z]', lines[i].lstrip()) and re.search(r'[a-zA-Z]{5,}', lines[i]) and '.' in lines[i]:
-                prose_indicators += 1
-        if prose_indicators > 1:  # If multiple initial lines look like prose
-            return False
-
-    math_line_count = 0
-    # Regex for common math keywords (ensure they are standalone, e.g., \sum not part of a word)
-    # Made keywords more specific, requiring backslash. Includes common operators.
-    # Note: Original prompt had unescaped ( in (\sum|...). Corrected to \\( for literal parenthesis if needed,
-    # but for grouping it's fine. The current regex uses \ for LaTeX commands.
-    # Added more keywords like \mathbb, \mathcal, \mathbf, \mathrm, etc.
-    # Added single letter Greek letters like \pi, \phi etc. that were in the original spec.
-    math_keywords_re = re.compile(
-        r"\\(?:sum|int|frac|sqrt|lim|prod|partial|nabla|infty|forall|exists|in|notin|"
-        r"subset|supset|approx|equiv|neq|leq|geq|times|div|pm|mp|cdot|circ|wedge|vee|cap|cup|"
-        r"oplus|otimes|perp|angle|hbar|ell|wp|Re|Im|mathbb|mathcal|mathbf|mathrm|mathsf|mathtt|"
-        r"alpha|beta|gamma|Gamma|delta|Delta|epsilon|varepsilon|zeta|eta|theta|Theta|iota|kappa|"
-        r"lambda|Lambda|mu|nu|xi|Xi|pi|Pi|rho|sigma|Sigma|tau|upsilon|Upsilon|phi|Phi|chi|psi|Psi|omega|Omega)|"
-        r"[=<>+\-*/^_{}()\[\]|%]"  # Common operators and delimiters
+    # 2. Strong Negative Indicators (Prose & Structure)
+    # LaTeX sectioning, list items, text formatting commands are strong non-math indicators
+    # Using raw strings for regex patterns
+    latex_text_commands_re = re.compile(
+        r"^\s*\\(section|subsection|subsubsection|paragraph|caption|label|ref|textit|textbf|texttt|item|footnote|chapter|part|textnormal|emph)\b",
+        re.IGNORECASE
     )
-    # Regex for typical equation structures (e.g., var = expr, lines with many operators)
-    # This pattern looks for an assignment or common binary operations.
-    equation_pattern_re = re.compile(r"^\s*([a-zA-Z0-9\s_^{}]+\s*=\s*.+)|(\S+\s*[*\/+\-<>]\s*\S+)")
+    if any(latex_text_commands_re.match(line) for line in lines):
+        return False # If any line starts with these commands, assume it's not a math block.
 
-    # Avoid classifying list items or very short text as math unless very obvious
-    if text_block.strip().startswith("\\item"): # Handles LaTeX \item
-        return False
-    if text_block.strip().startswith("* ") or text_block.strip().startswith("- "): # Handles markdown-like list items
-        # Check if it's a list item that is NOT math.
-        # If it's short and doesn't have strong math signals, assume it's a list item.
-        if num_lines == 1 and len(text_block) < 30 and not math_keywords_re.search(text_block):
-            return False
+    # Markdown list items (conservative: if a line looks like a list item, and the block is short and not dense with math)
+    markdown_list_re = re.compile(r"^\s*([-*+]|\d+\.)\s+")
+    if any(markdown_list_re.match(line) for line in lines):
+        # Count non-list lines; if all are list items or very few non-list items, it's likely a list.
+        non_list_lines = sum(1 for line in lines if not markdown_list_re.match(line))
+        # If the block is short, and mostly list items, and not overwhelmingly math.
+        if num_lines <= 5 and non_list_lines <=1:
+             # Check overall math density for this potential list
+            math_symbols_in_block = len(re.findall(r"[=+\-*/^_{}\[\]<>\\$]|\\(frac|sum|int|sqrt|mathbb|mathcal|mathbf)", text_block))
+            if math_symbols_in_block < num_lines : # If fewer math symbols than lines, probably a text list
+                return False
 
 
-    # Heuristic: check for prose indicators (long words, sentence structure)
-    # This is a strong negative indicator.
+    # Simple prose check: more than N words, ends with sentence punctuation.
     words = text_block.split()
-    # Consider it prose if it has many words and sentence-ending punctuation,
-    # and relatively few math keywords.
-    if len(words) > 25 and any(word.endswith(('.', '?', '!', ':')) for word in words): # Reduced word count threshold
-        math_keyword_matches = math_keywords_re.findall(text_block)
-        # If math keywords are sparse compared to number of lines or a fixed low count.
-        if len(math_keyword_matches) < max(2, num_lines / 3) : # Tunable: e.g. less than 2 keywords or < 1/3rd of lines
-             return False
+    # Adjusted word count and added check for multiple sentences for longer blocks.
+    if len(words) > 8 and any(text_block.endswith(punc) for punc in ['.', '?', '!']):
+        # Count basic math-like characters (operators, brackets, some keywords)
+        math_indicators_count = len(re.findall(r"[=+\-*/^_{}\[\]<>\\$]|\\(frac|sum|int|sqrt|alpha|beta|gamma|mathbb|mathcal|mathbf)", text_block))
 
-    for line_idx, line in enumerate(lines):
+        # If it has sentence structure and few math indicators, it's likely prose.
+        # Example: "This is a sentence with x = 1." might have one indicator.
+        # Threshold: if math indicators are less than, say, 1 for every 10 words, or less than num_lines / 2.
+        if math_indicators_count < max(1, len(words) / 10, num_lines / 2):
+            # Further check: number of lines ending with punctuation
+            sentence_end_count = sum(1 for line in lines if any(line.strip().endswith(punc) for punc in ['.', '?', '!']))
+            if sentence_end_count > num_lines / 2 or (num_lines ==1 and sentence_end_count ==1): # Majority of lines end like sentences
+                 return False
+
+    # If it's a very long block and not explicitly delimited, it's likely prose or mixed.
+    # Stricter: >5 lines is already quite long for an undelimited math block.
+    if num_lines > 5 and not (text_block.startswith("$$") or text_block.startswith("\\[") or text_block.startswith("\\begin")):
+        # Exception: if it's ALL math lines (e.g. a long derivation)
+        # This needs the math line checker below.
+        pass # Will be checked by line-by-line analysis later.
+
+    # Specific test cases from failures: "Conclusion.", "Hamiltonian", "Note:", "Introduction"
+    # These should be caught by the prose checks or lack of math indicators.
+    # Adding a small list of common non-math short headers/phrases:
+    common_short_prose = ["conclusion", "introduction", "summary", "abstract", "results", "discussion", "methods", "note", "figure", "table", "appendix"]
+    if num_lines == 1 and len(words) <= 2 and text_block.lower().strip('.').strip(':') in common_short_prose:
+        return False
+
+
+    # 3. Stricter Heuristics for Undelimited Math
+    # Count "equation-like" lines.
+    # Using a more specific regex for LaTeX commands (must start with \\)
+    # and common math symbols.
+    math_keywords_re = re.compile(
+        r"\\(?:sum|int|frac|sqrt|lim|alpha|beta|gamma|delta|omega|sin|cos|log|prod|partial|nabla|infty|forall|exists|in|notin|"
+        r"subset|supset|approx|equiv|neq|leq|geq|times|div|pm|mp|cdot|circ|wedge|vee|cap|cup|oplus|otimes|perp|angle|hbar|"
+        r"mathbb|mathcal|mathbf|mathrm|mathsf|mathtt|textrm|textit|textbf)|" # LaTeX commands
+        r"[=<>+\-*/^_{}()\[\]|%]"  # Individual symbols
+    )
+
+    equation_line_count = 0
+    strong_math_line_count = 0 # Lines that are almost certainly math
+
+    for line in lines:
         line_stripped = line.strip()
-        if not line_stripped:
+        if not line_stripped or line_stripped.startswith("%"): # Skip empty or comment lines
             continue
 
-        # Skip comment lines in LaTeX
-        if line_stripped.startswith("%"):
+        # Check 1: Presence of equals sign with substantial content, or common equation structures
+        # e.g. something = something, or f(x) = ..., or \frac{...}{...} = ...
+        if re.search(r"\S+\s*=\s*\S+", line_stripped) or \
+           re.search(r"^[a-zA-Z0-9_]+\(.+\)\s*=", line_stripped) or \
+           re.search(r"\\frac.+=", line_stripped):
+            equation_line_count += 1
+            strong_math_line_count +=1
             continue
 
-        # Strong indicators of a math line
-        # Check if keywords or equation patterns are present.
-        # Also, check if the line is almost entirely composed of math-related characters.
-        # (e.g. digits, operators, braces, common variable names like x, y, z, t, n, k, i, j)
-        non_space_chars = len(line_stripped.replace(" ", ""))
-        if non_space_chars > 0: # Avoid division by zero for empty lines after stripping
-            math_char_count = len(re.findall(r"[a-zA-Z0-9_^{}\[\]()+\-*/=<>.,:;\s\\]", line_stripped))
-            # A line is likely math if over 70% of its chars are math-related,
-            # or it contains specific math keywords/patterns.
-            # This ratio is a heuristic.
-            is_dense_math_line = (math_char_count / non_space_chars) > 0.7
+        # Check 2: Presence of multiple distinct math keywords or structures
+        # (e.g., \frac, \sum, \int, \sqrt, \lim, common operators if many)
+        # Or a mix of keywords and operators.
+        found_keywords = math_keywords_re.findall(line_stripped)
+        num_math_keywords = len(found_keywords)
 
-            if math_keywords_re.search(line_stripped) or equation_pattern_re.search(line_stripped) or is_dense_math_line:
-                math_line_count += 1
-            # Check for lines that are clearly text (e.g., start with \section, \subsection, or known text commands)
-            elif re.match(r"^\s*\\(section|subsection|subsubsection|caption|text|item)\b", line_stripped):
-                # This line is explicitly text, so it shouldn't count towards math_line_count
-                # And if we find too many such lines, the block is likely not math.
-                pass # Effectively counts as a non-math line.
+        # Consider a line strongly math if it has a LaTeX command AND an operator/bracket,
+        # or multiple LaTeX commands, or multiple operators.
+        has_latex_cmd = any(kw.startswith("\\") for kw in found_keywords)
+        has_operator_or_bracket = any(kw in "=<>+-*/^_{}()[]|%" for kw in found_keywords)
+
+        if (has_latex_cmd and has_operator_or_bracket) or \
+           (has_latex_cmd and num_math_keywords > 1) or \
+           (num_math_keywords > 2 and not has_latex_cmd): # e.g. ( x + y ) ^ 2
+            equation_line_count += 1
+            strong_math_line_count +=1
+            continue
+        elif has_latex_cmd and num_lines ==1: # Single line, single command (e.g. "\alpha")
+            equation_line_count +=1 # Tentatively count it
+            # No strong_math_line_count increment here unless it's complex.
+            continue
+        elif num_math_keywords >= 1 and num_lines == 1 and len(words) < 3 and len(line_stripped) < 15 : # e.g. x_1 or E_0
+             # Short, few words, one math keyword/symbol found by regex
+             if re.fullmatch(r"[a-zA-Z0-9_^{}]+", line_stripped.replace("\\", "")): # Check if it's just a variable name with sub/super
+                 equation_line_count +=1
+                 continue
 
 
     if num_lines == 0: return False
 
     # Decision logic:
-    # 1. Short blocks (1-3 lines): need at least one clearly math line.
-    # 2. Medium blocks (4-10 lines): need a higher proportion (e.g., >50%) of math lines.
-    # 3. Longer blocks (>10 lines): need a very high proportion (e.g., >60-70%) or other strong signals,
-    #    already partly handled by the num_lines > 15 check.
+    # Case 1: Single line block
+    if num_lines == 1:
+        # Must be a strong math line or have multiple indicators if not an explicit environment
+        if strong_math_line_count >= 1:
+            return True
+        if equation_line_count >=1: # Counted by the weaker single-line checks
+             # Check if it's a very simple variable/constant or a single LaTeX command
+            if len(words) <= 2 and len(text_block) < 15 :
+                 # e.g. "x", "E_0", "\alpha"
+                 # Avoid classifying "alpha" (word) as math unless it's "\alpha"
+                 if text_block.startswith("\\") or re.fullmatch(r"[a-zA-Z0-9_^{}\[\]()+\-*/=<>|%]+", text_block) :
+                    if not (text_block.lower() in common_short_prose or (len(text_block)>3 and text_block.isalpha() and not text_block.startswith("\\"))):
+                         return True
+        return False # Otherwise, single undelimited lines are not math by default
 
-    if num_lines <= 3:
-        # For very short blocks, also check character density if only one line is "mathy"
-        if math_line_count >= 1:
-            if num_lines == 1: # Single line block
-                # For a single line, require high density of math characters or explicit math keywords/equation patterns
-                # unless it's explicitly delimited (handled at the start)
-                non_space_chars = len(text_block.replace(" ", ""))
-                if non_space_chars > 0:
-                    math_chars_in_block = len(math_keywords_re.findall(text_block)) # Count actual math keywords/symbols
-                    # A single line must be very math heavy or have multiple keywords.
-                    # Or be an equation.
-                    if equation_pattern_re.search(text_block) or math_chars_in_block >= 2 or \
-                       (len(re.findall(r"[a-zA-Z0-9_^{}\[\]()+\-*/=<>.,\s\\]", text_block)) / non_space_chars > 0.8 and non_space_chars > 5):
-                        return True
-                    else: # Single line that's not dense enough
-                        return False
-                else: # Empty single line
-                    return False
-            return True # 2-3 lines with at least one math line
-    elif num_lines <= 10: # Medium blocks
-        if math_line_count / num_lines >= 0.5: # At least 50% math lines
-            return True
-    else: # Longer blocks (already filtered by num_lines > 15 initial check)
-        if math_line_count / num_lines >= 0.6: # Stricter for longer blocks, >60%
-            return True
+    # Case 2: Multi-line blocks (require a higher proportion of mathy lines)
+    # And not too many words overall, unless keywords are very dense.
+    # At least 60% of lines must look like equations (strong or regular).
+    # Or, at least 40% must be *strong* math lines.
+    if (equation_line_count / num_lines >= 0.6) or \
+       (strong_math_line_count / num_lines >= 0.4 and num_lines <=5) : # more lenient for shorter multi-line
+        # Additional check for very wordy blocks that might still pass above thresholds
+        if len(words) > num_lines * 7 and num_lines > 2: # Avg more than 7 words per line for >2 lines
+            # If very wordy, require even higher proportion of math lines
+            if equation_line_count / num_lines < 0.8:
+                return False # Likely prose with some equations interspersed
+        return True
+
+    # Check for long blocks that weren't caught by the earlier num_lines > 5 check
+    # if they didn't meet the equation_line_count criteria
+    if num_lines > 5 and equation_line_count / num_lines < 0.5:
+        return False # Too long, not enough math lines
 
     return False
 
